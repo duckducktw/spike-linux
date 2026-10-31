@@ -10,12 +10,13 @@
 
 ## 安裝
 
-### .deb（Ubuntu 24.04+ / Debian 13+）
+### 套件（.deb / .rpm）
 
-到 [Releases](https://github.com/duckducktw/spike-linux/releases) 下載 `spike3-linux_*_all.deb`：
+到 [Releases](https://github.com/duckducktw/spike-linux/releases) 下載：
 
 ```bash
-sudo apt install ./spike3-linux_*_all.deb
+sudo apt install ./spike3-linux_*_all.deb        # Ubuntu 24.04+ / Debian 13+
+sudo dnf install ./spike3-linux-*.noarch.rpm     # Fedora 41+
 spike3
 ```
 
@@ -33,7 +34,7 @@ sudo usermod -aG dialout $USER            # USB 連 Hub 需要，做完重新登
 
 ### 發新版
 
-推一個 `v*` tag，GitHub Actions 會跑測試、打包 .deb、在乾淨的 Ubuntu 容器裡裝一次，然後自動發 Release。
+推一個 `v*` tag，GitHub Actions 會跑測試、打包 .deb 和 .rpm、在乾淨的 Ubuntu / Debian / Fedora 容器裡各裝一次，然後自動發 Release。
 
 ## 支援狀況
 

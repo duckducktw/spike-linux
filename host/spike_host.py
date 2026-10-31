@@ -42,6 +42,7 @@ APP_ROOT = Path(os.environ.get("SPIKE_APP_ROOT", HERE.parent / "app")).resolve()
 PLATFORM = APP_ROOT / "platform"
 WEB = PLATFORM / "web"
 
+HOSTNAME = "spike.localhost"  # Chrome resolves *.localhost to loopback; gives the window its own app id
 HOST_VERSION = "3.6.1.22676"
 XDG_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 XDG_DATA = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
@@ -894,13 +895,13 @@ class Host:
     # ------------------------------------------------------------------ urls
     @property
     def base(self):
-        return f"http://localhost:{self.port}"
+        return f"http://{HOSTNAME}:{self.port}"
 
     def boot_url(self):
         from urllib.parse import urlencode
         q = {"appId": CFG.get("appId", "spike"), "debugUrl": f"{self.base}/debug",
              "defaultLanguage": CFG.get("defaultLanguage", "en-US"), "fullVersion": FULL_VERSION,
-             "sentryEnabled": "0", "webUrl": self.base, "wsUrl": f"ws://localhost:{self.port}"}
+             "sentryEnabled": "0", "webUrl": self.base, "wsUrl": f"ws://{HOSTNAME}:{self.port}"}
         return f"{self.base}/?{urlencode(q)}"
 
     @web.middleware

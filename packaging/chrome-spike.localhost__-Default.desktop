@@ -9,4 +9,4 @@ Terminal=false
 Categories=Education;Development;
 Keywords=lego;spike;prime;essential;robot;scratch;python;
 MimeType=application/x-lego-spike3;application/x-lego-spike;
-StartupWMClass=lego-spike
+StartupWMClass=chrome-spike.localhost__-Default

@@ -34,7 +34,7 @@ exec /usr/bin/python3 /usr/lib/$PKG/spike3.py "\$@"
 EOF
 chmod 755 "$D/usr/bin/spike3"
 
-install -m644 "$ROOT/packaging/lego-spike3.desktop" "$D/usr/share/applications/"
+install -m644 "$ROOT/packaging/chrome-spike.localhost__-Default.desktop" "$D/usr/share/applications/"
 install -m644 "$ROOT/packaging/lego-spike3-mime.xml" "$D/usr/share/mime/packages/lego-spike3.xml"
 install -m644 "$ROOT/packaging/icon.png" "$D/usr/share/icons/hicolor/256x256/apps/lego-spike3.png"
 install -m644 "$ROOT/packaging/70-lego-spike.rules" "$D/usr/lib/udev/rules.d/"

@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "vendor"))
 sys.path.insert(0, str(HERE))
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SPIKE_VERSION = "3.6.1"
 MSI_URL = "https://assets.education.lego.com/_/downloads/SPIKE_APP_3_Win10__3.6.1_Global.msi"
 MSI_SHA256 = "f2b4bd158d3e948e65e9ce00366e6afa6d69f4fe546e1f8b4bad2e6fdf18d31a"

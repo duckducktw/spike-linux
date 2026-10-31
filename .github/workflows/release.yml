@@ -10,61 +10,85 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install build + runtime deps
+      - name: Install deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fakeroot lintian python3-pip python3-aiohttp python3-serial python3-bleak python3-pefile msitools
-
+          sudo apt-get install -y -qq python3-aiohttp python3-serial python3-bleak python3-pefile msitools
       - name: Syntax check
         run: python3 -m py_compile host/*.py tests/*.py
-
       - name: Serial bridge end-to-end test (fake hub on a pty)
         run: |
           python3 -m venv --system-site-packages .venv
           .venv/bin/pip install -q dnfile==0.18.0
-          # host needs an appconfig to start; a minimal stub is enough for the RPC/serial test
           mkdir -p app/platform/hosts app/platform/web
           echo '{"name":"LEGO Education SPIKE","userDataFolder":"SPIKE3-ci","fileAssociations":[{"ext":"llsp3"}]}' > app/platform/hosts/appconfig.json
           echo '<html><head></head></html>' > app/platform/web/index.html
           timeout 60 .venv/bin/python tests/test_rpc_serial.py
 
-      - name: Build .deb
-        id: deb
+  deb:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
         run: |
           VER="${GITHUB_REF_NAME#v}"
           [[ "$GITHUB_REF" == refs/tags/v* ]] || VER="0.0.0~ci${GITHUB_RUN_NUMBER}"
-          DEB=$(packaging/build-deb.sh "$VER")
-          echo "path=$DEB" >> "$GITHUB_OUTPUT"
-          dpkg-deb --info "$DEB"
-          dpkg-deb --contents "$DEB"
-          lintian --no-tag-display-limit "$DEB" || true
-
-      - name: Install test (clean Ubuntu container)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+      - name: Build .deb
         run: |
-          docker run --rm -v "$PWD/dist:/dist" ubuntu:24.04 bash -euxc '
-            apt-get update -qq
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /dist/*.deb
-            spike3 --version
-            python3 -c "import sys; sys.path.insert(0, \"/usr/lib/spike3-linux/vendor\"); import dnfile, aiohttp, serial, bleak; print(\"imports ok\")"
-            test -f /usr/lib/udev/rules.d/70-lego-spike.rules
-            test -f /usr/share/applications/lego-spike3.desktop
-            apt-get remove -y -qq spike3-linux'
-
+          sudo apt-get update -qq && sudo apt-get install -y -qq fakeroot lintian python3-pip
+          packaging/build-deb.sh "$VER"
+          dpkg-deb --info dist/*.deb
+          lintian --no-tag-display-limit dist/*.deb || true
+      - name: Install test (Ubuntu 24.04, Debian 13)
+        run: |
+          for img in ubuntu:24.04 debian:13; do
+            echo "::group::$img"
+            docker run --rm -v "$PWD/dist:/dist:ro" -v "$PWD/packaging/test-pkg-in-docker.sh:/t.sh:ro" "$img" bash /t.sh
+            echo "::endgroup::"
+          done
       - uses: actions/upload-artifact@v4
-        with:
-          name: deb
-          path: dist/*.deb
+        with: { name: deb, path: dist/*.deb }
 
+  rpm:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || VER="0.0.0~ci${GITHUB_RUN_NUMBER}"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+      - name: Build .rpm (Fedora container)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src fedora:42 bash -euc "
+            dnf -q -y install rpm-build python3-pip >/dev/null
+            packaging/build-rpm.sh '$VER'
+            rpm -qpi dist/*.rpm
+            chown -R $(id -u):$(id -g) dist"
+      - name: Install test (Fedora 42)
+        run: docker run --rm -v "$PWD/dist:/dist:ro" -v "$PWD/packaging/test-pkg-in-docker.sh:/t.sh:ro" fedora:42 bash /t.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: rpm, path: dist/*.rpm }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deb, rpm]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd dist && sha256sum *.deb > SHA256SUMS && cd ..
-          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/SHA256SUMS \
+          cd dist && sha256sum *.deb *.rpm > SHA256SUMS && cat SHA256SUMS && cd ..
+          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/*.rpm dist/SHA256SUMS \
             --title "$GITHUB_REF_NAME" --notes-file packaging/release-notes.md

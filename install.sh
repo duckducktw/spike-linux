@@ -32,7 +32,7 @@ if [ ! -f "$PREFIX/app/platform/web/index.html" ]; then
   [ "$MSI" = "$PREFIX/SPIKE.msi" ] && rm -f "$MSI"
 fi
 
-cp "$PREFIX/app/platform/icons/icon310x310.png" "$PREFIX/icon.png"
+install -Dm644 "$SRC/packaging/icon.png" "$HOME/.local/share/icons/hicolor/256x256/apps/lego-spike3.png"
 
 cat > "$BIN/spike3" <<EOF
 #!/bin/sh
@@ -40,17 +40,17 @@ exec "$PREFIX/venv/bin/python" "$PREFIX/host/spike_host.py" "\$@"
 EOF
 chmod +x "$BIN/spike3"
 
-cat > "$APPS/lego-spike3.desktop" <<EOF
+cat > "$APPS/chrome-spike.localhost__-Default.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=LEGO Education SPIKE
 Comment=SPIKE Prime / Essential
 Exec=$BIN/spike3 %F
-Icon=$PREFIX/icon.png
+Icon=lego-spike3
 Terminal=false
 Categories=Education;Development;
 MimeType=application/x-lego-spike3;application/x-lego-spike;
-StartupWMClass=lego-spike
+StartupWMClass=chrome-spike.localhost__-Default
 EOF
 
 mkdir -p "$HOME/.local/share/mime/packages"
@@ -63,7 +63,7 @@ cat > "$HOME/.local/share/mime/packages/lego-spike3.xml" <<'EOF'
 EOF
 update-mime-database "$HOME/.local/share/mime" >/dev/null 2>&1 || true
 update-desktop-database "$APPS" >/dev/null 2>&1 || true
-xdg-mime default lego-spike3.desktop application/x-lego-spike3 application/x-lego-spike 2>/dev/null || true
+xdg-mime default chrome-spike.localhost__-Default.desktop application/x-lego-spike3 application/x-lego-spike 2>/dev/null || true
 
 echo
 echo "安裝完成：選單搜尋「LEGO Education SPIKE」或執行 spike3"
