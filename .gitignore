@@ -1,0 +1,11 @@
+app/
+root/
+msi/
+res/
+cab/
+decomp/
+*.msi
+.venv/
+files.txt
+probe.py
+__pycache__/
