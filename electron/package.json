@@ -1,0 +1,132 @@
+{
+  "name": "spike3-linux",
+  "productName": "spike3-linux",
+  "version": "0.2.0",
+  "description": "LEGO Education SPIKE 3 app for Linux (unofficial)",
+  "homepage": "https://github.com/duckducktw/spike-linux",
+  "author": {
+    "name": "spike-linux",
+    "email": "noreply@github.com"
+  },
+  "license": "MIT",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --linux deb rpm --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.2.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "io.github.duckducktw.spike3linux",
+    "executableName": "spike3",
+    "artifactName": "${name}_${version}_${arch}.${ext}",
+    "directories": {
+      "output": "../dist"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../host",
+        "to": "host",
+        "filter": [
+          "spike_host.py",
+          "extract.py",
+          "spike3.py",
+          "vendor/**/*"
+        ]
+      },
+      {
+        "from": "../packaging/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "LICENSE"
+      }
+    ],
+    "asar": true,
+    "linux": {
+      "target": [
+        "deb",
+        "rpm"
+      ],
+      "category": "Education",
+      "icon": "../packaging/icon.png",
+      "synopsis": "LEGO Education SPIKE 3 for Linux (unofficial)",
+      "description": "Runs the official LEGO Education SPIKE 3 web app on Linux with a bundled Chromium (Electron) and a Python reimplementation of the Windows app's native layer (USB/BLE hub bridge, projects, content). On first launch the official Windows installer is downloaded from LEGO, verified and extracted for the current user; no LEGO files are shipped. Not affiliated with the LEGO Group.",
+      "desktop": {
+        "entry": {
+          "Name": "LEGO Education SPIKE",
+          "GenericName": "Robotics Programming",
+          "Comment": "SPIKE Prime / Essential programming app (unofficial Linux port)",
+          "Keywords": "lego;spike;prime;essential;robot;scratch;python;",
+          "MimeType": "application/x-lego-spike3;application/x-lego-spike;"
+        }
+      },
+      "fileAssociations": [
+        {
+          "ext": "llsp3",
+          "name": "SPIKE Project",
+          "mimeType": "application/x-lego-spike3"
+        },
+        {
+          "ext": "llsp",
+          "name": "SPIKE Legacy Project",
+          "mimeType": "application/x-lego-spike"
+        }
+      ],
+      "executableName": "spike3",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "packageName": "spike3-linux",
+      "depends": [
+        "python3 (>= 3.10)",
+        "python3-aiohttp (>= 3.8)",
+        "python3-serial",
+        "python3-bleak (>= 0.20)",
+        "python3-pefile",
+        "msitools",
+        "zenity | kdialog",
+        "libgtk-3-0 | libgtk-3-0t64",
+        "libnss3",
+        "libxss1",
+        "libasound2 | libasound2t64"
+      ],
+      "recommends": [
+        "bluez"
+      ],
+      "afterInstall": "../packaging/after-install.sh",
+      "afterRemove": "../packaging/after-remove.sh",
+      "compression": "xz"
+    },
+    "rpm": {
+      "packageName": "spike3-linux",
+      "depends": [
+        "python3 >= 3.10",
+        "python3-aiohttp",
+        "python3-pyserial",
+        "python3-dbus-fast",
+        "python3-pefile",
+        "msitools",
+        "(zenity or kdialog)",
+        "gtk3",
+        "nss",
+        "libXScrnSaver",
+        "alsa-lib"
+      ],
+      "afterInstall": "../packaging/after-install.sh",
+      "afterRemove": "../packaging/after-remove.sh",
+      "fpm": [
+        "--rpm-rpmbuild-define=_build_id_links none"
+      ]
+    }
+  },
+  "desktopName": "lego-spike3.desktop"
+}

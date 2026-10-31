@@ -10,3 +10,5 @@ files.txt
 probe.py
 __pycache__/
 dist/
+host/vendor/
+electron/node_modules/

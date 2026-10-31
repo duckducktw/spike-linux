@@ -6,7 +6,7 @@
 
 - `host/extract.py`：從官方 MSI 裡把網頁 app 原封不動抽出來（藏在 1.3 GB 的 .NET DLL 資源裡）。
 - `host/spike_host.py`：用 Python 重寫原生外殼（照反編譯的 C# 行為做），網頁 app 不改一行。
-- 視窗：用系統的 Chrome / Chromium / Edge 以 `--app` 模式開（無網址列）。
+- `electron/`：視窗用 Electron（內建 Chromium），不需要系統瀏覽器；Python host 由 Electron 啟動與關閉。
 
 ## 安裝
 
@@ -15,22 +15,23 @@
 到 [Releases](https://github.com/duckducktw/spike-linux/releases) 下載：
 
 ```bash
-sudo apt install ./spike3-linux_*_all.deb        # Ubuntu 24.04+ / Debian 13+
-sudo dnf install ./spike3-linux-*.noarch.rpm     # Fedora 41+
+sudo apt install ./spike3-linux_*_amd64.deb      # Ubuntu 24.04+ / Debian 13+
+sudo dnf install ./spike3-linux_*_x86_64.rpm     # Fedora 41+
 spike3
 ```
 
 第一次開啟會從 LEGO 官方下載安裝檔（約 1.4 GB）、驗證 SHA-256 後解出網頁 app。套件本身不含任何 LEGO 檔案。USB 連 Hub 已附 udev 規則，不用加 dialout 群組。
 
-### 從原始碼
+裝完選單有「LEGO Education SPIKE」，或執行 `spike3`。`.llsp3` / `.llsp` 檔可雙擊開啟。
+
+### 從原始碼打包
 
 ```bash
-sudo apt install msitools python3-venv   # 加上 Chrome 或 Chromium
-./install.sh                              # 自動下載官方 MSI；或 ./install.sh 路徑/SPIKE.msi
-sudo usermod -aG dialout $USER            # USB 連 Hub 需要，做完重新登入
+sudo apt install msitools rpm python3-pip nodejs npm
+packaging/build.sh          # -> dist/*.deb dist/*.rpm
 ```
 
-裝完選單有「LEGO Education SPIKE」，或執行 `spike3`。`.llsp3` / `.llsp` 檔可雙擊開啟。
+開發時直接跑：`cd electron && npm ci && SPIKE_APP_ROOT=<解出的 app 目錄> npx electron .`
 
 ### 發新版
 
@@ -60,7 +61,8 @@ sudo usermod -aG dialout $USER            # USB 連 Hub 需要，做完重新登
 ## 測試
 
 ```bash
-.venv/bin/python tests/test_rpc_serial.py   # 用假的序列埠模擬 Hub，測 USB 通道全程
+.venv/bin/python tests/test_rpc_serial.py        # 用假的序列埠模擬 Hub，測 USB 通道全程
+packaging/test-pkg-in-docker.sh                  # 在乾淨容器裡裝套件、開 Electron、檢查積木區（見檔頭用法）
 ```
 
 ## 授權

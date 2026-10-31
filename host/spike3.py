@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "vendor"))
 sys.path.insert(0, str(HERE))
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 SPIKE_VERSION = "3.6.1"
 MSI_URL = "https://assets.education.lego.com/_/downloads/SPIKE_APP_3_Win10__3.6.1_Global.msi"
 MSI_SHA256 = "f2b4bd158d3e948e65e9ce00366e6afa6d69f4fe546e1f8b4bad2e6fdf18d31a"
@@ -47,7 +47,7 @@ class Progress:
     def __init__(self, title):
         self.proc = None
         self.last = -1
-        if not sys.stdout.isatty() and os.environ.get("DISPLAY", os.environ.get("WAYLAND_DISPLAY")) and shutil.which("zenity"):
+        if not sys.stderr.isatty() and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and shutil.which("zenity"):
             self.proc = subprocess.Popen(["zenity", "--progress", "--title", title, "--width", "460",
                                           "--auto-close", "--no-cancel", "--text", title],
                                          stdin=subprocess.PIPE, text=True)
@@ -61,7 +61,7 @@ class Progress:
             except BrokenPipeError:
                 pass
         elif pct != self.last:
-            print(f"\r[{pct:3d}%] {text}".ljust(70), end="", flush=True)
+            print(f"\r[{pct:3d}%] {text}".ljust(70), end="", flush=True, file=sys.stderr)
         self.last = pct
 
     def close(self):
@@ -73,12 +73,12 @@ class Progress:
                 pass
             self.proc.wait()
         else:
-            print()
+            print(file=sys.stderr)
 
 
 def error(msg):
     print(msg, file=sys.stderr)
-    if not sys.stdout.isatty() and shutil.which("zenity"):
+    if not sys.stderr.isatty() and shutil.which("zenity"):
         subprocess.run(["zenity", "--error", "--width", "420", "--title", "LEGO Education SPIKE", "--text", msg])
     sys.exit(1)
 
@@ -126,7 +126,7 @@ def setup(msi: str | None = None):
         prog.close()
         error(f"設定失敗：{e}")
     prog.close()
-    print(f"web app ready at {out}")
+    print(f"web app ready at {out}", file=sys.stderr)
 
 
 def main():

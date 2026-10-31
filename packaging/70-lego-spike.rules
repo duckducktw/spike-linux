@@ -1,5 +1,0 @@
-# LEGO Education hubs (SPIKE Prime/Essential, MINDSTORMS Robot Inventor) over USB CDC-ACM.
-# Grants the logged-in desktop user access without joining the dialout group.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0694", TAG+="uaccess"
-# DFU / bootloader mode used during firmware updates
-SUBSYSTEM=="usb", ATTRS{idVendor}=="0694", TAG+="uaccess"

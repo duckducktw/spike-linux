@@ -1361,7 +1361,11 @@ async def main():
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--headless", action="store_true", help="server only, do not open a window")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--embedded", action="store_true",
+                    help="run under the Electron shell: print 'READY <json>' on stdout, exit when stdin closes")
     args = ap.parse_args()
+    if args.embedded:
+        args.headless = True
 
     USER_DATA.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -1369,7 +1373,7 @@ async def main():
                         handlers=[logging.StreamHandler(), logging.FileHandler(USER_DATA / "log.txt")])
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
 
-    if not args.headless and await try_activate(args.files):
+    if not args.embedded and not args.headless and await try_activate(args.files):
         log.info("forwarded to running instance")
         return
 
@@ -1392,6 +1396,19 @@ async def main():
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
+
+    if args.embedded:
+        print("READY " + json.dumps({"url": host.boot_url(), "base": host.base, "port": port}), flush=True)
+
+        def parent_gone():  # Electron closed our stdin (exit or crash) -> shut down
+            try:
+                if not os.read(0, 4096):
+                    loop.remove_reader(0)
+                    stop.set()
+            except OSError:
+                loop.remove_reader(0)
+                stop.set()
+        loop.add_reader(0, parent_gone)
 
     browser_proc = None
     if not args.headless:
