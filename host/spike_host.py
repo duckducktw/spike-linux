@@ -59,7 +59,11 @@ def documents_dir() -> Path:
 
 
 def load_appconfig() -> dict:
-    return json.loads((PLATFORM / "hosts" / "appconfig.json").read_text(encoding="utf-8"))
+    f = PLATFORM / "hosts" / "appconfig.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        sys.exit(f"web app not found or incomplete at {APP_ROOT} ({e}); run `spike3 --setup`")
 
 
 CFG = load_appconfig()
@@ -69,6 +73,8 @@ CONTENT_DIR = XDG_DATA / CFG.get("userDataFolder", "SPIKE3") / CFG.get("contentF
 PROJECT_DIR = documents_dir() / CFG.get("projectFolder", APP_NAME)
 PROJECT_EXTS = [fa["ext"] for fa in CFG.get("fileAssociations", [])] or ["llsp3", "llsp"]
 FULL_VERSION = CFG.get("fullVersion", "3.6.1")
+# MenuBarItemEnum of the Windows host (values sent in /menu/itemClicked)
+MENU_ITEMS = {"newProject", "openProject", "saveAs", "moveTo", "share", "settings", "help", "checkForUpdate"}
 
 mimetypes.add_type("text/plain; charset=utf-8", ".websrt")
 mimetypes.add_type("video/x-matroska", ".mkv")
@@ -98,12 +104,23 @@ def parse_dt(v):
 
 
 def safe_join(base: Path, rel: str) -> Path | None:
-    rel = rel.replace("\\", "/").lstrip("/")
+    rel = (rel or "").replace("\\", "/").lstrip("/")
     p = (base / rel).resolve()
     try:
         p.relative_to(base.resolve())
     except ValueError:
         return None
+    return p
+
+
+class BadPath(ValueError):
+    pass
+
+
+def must_join(base: Path, rel: str) -> Path:
+    p = safe_join(base, rel)
+    if p is None:
+        raise BadPath("invalid path")
     return p
 
 
@@ -121,6 +138,9 @@ class Dialogs:
                 break
 
     async def _run(self, args):
+        fake = os.environ.get("SPIKE_FAKE_DIALOG")
+        if fake is not None:  # tests: every dialog answers with this path ("" = cancelled)
+            return fake or None
         if not self.tool:
             log.warning("no kdialog/zenity available for file dialogs")
             return None
@@ -236,6 +256,13 @@ class Projects:
         self.list_path = USER_DATA / "availableProjects.json"
         self.projects: dict[str, dict] = {}  # id -> {path, name, created, lastsaved, meta}
         self.initial: list[str] = []
+        # every read-modify-write of self.projects + availableProjects.json goes through this lock
+        self._lock = asyncio.Lock()
+
+    async def locked(self, fn, *args):
+        """Run a blocking project operation in a worker thread, one at a time."""
+        async with self._lock:
+            return await asyncio.to_thread(fn, *args)
 
     # metadata ---------------------------------------------------------
     @staticmethod
@@ -459,8 +486,21 @@ class Projects:
         self.save_list()
         return rec["id"]
 
+    def add_files(self, paths):
+        return [i for i in (self.add_file(p) for p in paths) if i]
+
+    def store_dropped(self, name: str, data: bytes) -> Path:
+        """Copy a project dropped onto the window into the project folder (dedupe identical files)."""
+        PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+        dst = PROJECT_DIR / Path(name).name
+        if dst.exists() and dst.read_bytes() != data:
+            dst = self.unique_path(Path(name).stem).with_suffix(Path(name).suffix)
+        if not dst.exists():
+            dst.write_bytes(data)
+        return dst
+
     async def open_files(self, paths):
-        ids = [i for i in (self.add_file(p) for p in paths) if i]
+        ids = await self.locked(self.add_files, list(paths))
         if ids:
             await self.server.broadcast("/projects/opennotification", {"ids": ids})
         return ids
@@ -735,13 +775,13 @@ class Content:
     def p(self, *parts) -> Path:
         return CONTENT_DIR.joinpath(*[x.replace("\\", "/") for x in parts])
 
-    async def write_tmp(self, tmp_id, rel, data):
-        dst = safe_join(CONTENT_DIR, f"tmp/{tmp_id}/{rel}")
+    def write_tmp(self, tmp_id, rel, data):
+        dst = must_join(CONTENT_DIR, f"tmp/{tmp_id}/{rel}")
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(data)
 
     def write_resource(self, rel, text):
-        dst = safe_join(CONTENT_DIR, rel)
+        dst = must_join(CONTENT_DIR, rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(text, encoding="utf-8")
 
@@ -851,28 +891,176 @@ INJECT_JS = r"""
     }
   }, true);
   window.addEventListener('keydown', function(ev){
-    if (!(ev.ctrlKey || ev.metaKey)) return;
+    if (!(ev.ctrlKey || ev.metaKey) || !window.__spikeMenu) return;
     const k = ev.key.toLowerCase(); let item = null;
-    if (k === 'o') item = 'openProject';
+    if (k === 'o' && !ev.shiftKey && !ev.altKey) item = 'openProject';
     else if (k === 'n' && ev.altKey) item = 'newProject';
     else if (k === 's' && ev.shiftKey) item = 'saveAs';
-    if (item) { ev.preventDefault(); fetch('/linux/menu?item=' + item, {method:'POST'}); }
+    if (item && window.__spikeMenu.enabled(item)) { ev.preventDefault(); ev.stopPropagation(); window.__spikeMenu.click(item); }
   }, true);
+})();
+</script>
+<script>
+/* Linux host: application menu bar (File / Edit / View / Help).
+   Windows draws this natively in WPF (UIMenuBuilder) and sends /menu/itemClicked to the web app;
+   here the same items live in a thin HTML bar above the app and go through the same RPC. */
+(function(){
+  const ITEMS = {
+    file: [['newProject','menu.file.new_project','Ctrl+Alt+N'], ['openProject','menu.file.open','Ctrl+O'], '-',
+           ['saveAs','menu.file.save_as','Ctrl+Shift+S'], ['moveTo','menu.file.move_to',''], ['share','menu.file.share',''], '-',
+           ['@quit','menu.mac_app.quit','Ctrl+Q']],
+    edit: [['@undo','menu.edit.undo','Ctrl+Z'], ['@redo','menu.edit.redo','Ctrl+Shift+Z'], '-',
+           ['@cut','menu.edit.cut','Ctrl+X'], ['@copy','menu.edit.copy','Ctrl+C'], ['@paste','menu.edit.paste','Ctrl+V'], '-',
+           ['@selectAll','menu.edit.select_all','Ctrl+A']],
+    view: [['@reload','menu.view.reload','Ctrl+R'], '-', ['@fullscreen','menu.view.fullscreen','F11']],
+    help: [['help','menu.help.item',''], ['settings','menu.settings','']]
+  };
+  const ORDER = ['file','edit','view','help'];
+  const PROJECT_ITEMS = ['saveAs','moveTo','share'];
+  let labels = {}, state = {initial: true, project: false};
+  let ws = null, seq = 0, pending = {};
+  const BASE = location.origin.replace(/^http/, 'ws');
+  const tr = (k) => {
+    const v = (labels[k] || (/\./.test(k) ? k.split('.').pop().replace(/_/g,' ') : k));
+    return v.replace('{{name}}', 'SPIKE').replace(/\.{3,}|…+/g, '…');
+  };
+  function rpc(method, params){
+    return new Promise((res) => {
+      if (!ws || ws.readyState !== 1) return res(null);
+      const id = 'm' + (++seq); pending[id] = res;
+      ws.send(JSON.stringify({jsonrpc:'2.0', id, method, params: params || {}}));
+      setTimeout(() => { if (pending[id]) { delete pending[id]; res(null); } }, 5000);
+    });
+  }
+  function connect(){
+    ws = new WebSocket(BASE + '/');
+    ws.onopen = async () => { const r = await rpc('/linux/menuInfo'); if (r) { labels = r.labels || {}; state = r.state || state; render(); } };
+    ws.onmessage = (m) => {
+      let d; try { d = JSON.parse(m.data); } catch(e) { return; }
+      if (d.id && pending[d.id]) { const f = pending[d.id]; delete pending[d.id]; f(d.result || null); return; }
+      if (d.method === '/linux/menuState') { state = d.params || state; render(); }
+      else if (d.method === '/linux/menuLabels') { labels = d.params || labels; render(); }
+    };
+    ws.onclose = () => setTimeout(connect, 1500);
+  }
+  function enabled(id){
+    if (PROJECT_ITEMS.includes(id)) return !!state.project;
+    return true;
+  }
+  // Electron: the bar is a real native menu (electron/main.js); this page only reports labels + state.
+  const shell = (window.spikeShell && window.spikeShell.setMenu) ? window.spikeShell : null;
+  function local(id){
+    const ae = document.activeElement;
+    switch (id) {
+      case '@undo': case '@redo': case '@cut': case '@copy': case '@selectAll':
+        if (ae && ae.focus) ae.focus();
+        return document.execCommand(id === '@selectAll' ? 'selectAll' : id.slice(1));
+      case '@paste':
+        if (navigator.clipboard && navigator.clipboard.readText)
+          return navigator.clipboard.readText().then(t => { if (ae && ae.focus) ae.focus(); document.execCommand('insertText', false, t); }).catch(() => {});
+        return;
+      case '@reload': return location.reload();
+      case '@fullscreen':
+        return document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+      case '@quit': return window.close();
+    }
+  }
+  function click(id){
+    close();
+    if (id.startsWith('@')) return local(id);
+    if (!enabled(id)) return;
+    rpc('/linux/menu', {item: id});
+  }
+  window.__spikeMenu = {click, enabled};
+
+  let bar = null, openMenu = null;
+  function close(){
+    if (openMenu) { openMenu.remove(); openMenu = null; }
+    bar && bar.querySelectorAll('.lsm-top').forEach(b => b.classList.remove('lsm-open'));
+  }
+  function open(key, btn){
+    close();
+    btn.classList.add('lsm-open');
+    const m = document.createElement('div'); m.className = 'lsm-pop'; m.setAttribute('role','menu');
+    for (const it of ITEMS[key]) {
+      if (it === '-') { const s = document.createElement('div'); s.className = 'lsm-sep'; m.appendChild(s); continue; }
+      const [id, label, acc] = it;
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'lsm-item'; b.setAttribute('role','menuitem');
+      b.dataset.item = id;
+      b.disabled = !enabled(id);
+      const l = document.createElement('span'); l.textContent = tr(label);
+      const a = document.createElement('span'); a.className = 'lsm-acc'; a.textContent = acc;
+      b.append(l, a);
+      // keep focus (and the text selection) in the app so Edit actions apply to it
+      b.addEventListener('mousedown', e => e.preventDefault());
+      b.addEventListener('click', e => { e.stopPropagation(); click(id); });
+      m.appendChild(b);
+    }
+    const r = btn.getBoundingClientRect();
+    m.style.left = r.left + 'px'; m.style.top = r.bottom + 'px';
+    document.body.appendChild(m); openMenu = m;
+  }
+  function render(){
+    if (shell) { shell.setMenu({labels, state}); return; }
+    if (!document.body) return;
+    if (!bar) {
+      const css = document.createElement('style');
+      css.textContent = `
+        #linux-spike-menubar{position:fixed;top:0;left:0;right:0;height:26px;z-index:2147483646;display:flex;align-items:stretch;
+          background:#f3f3f3;border-bottom:1px solid #d6d6d6;font:13px/1 system-ui,-apple-system,"Noto Sans",sans-serif;color:#222;user-select:none}
+        #linux-spike-menubar .lsm-top{all:unset;padding:0 10px;display:flex;align-items:center;cursor:default}
+        #linux-spike-menubar .lsm-top:hover,#linux-spike-menubar .lsm-top.lsm-open{background:#dcdcdc}
+        .lsm-pop{position:fixed;z-index:2147483647;min-width:230px;background:#fff;border:1px solid #c8c8c8;border-radius:4px;
+          box-shadow:0 4px 14px rgba(0,0,0,.18);padding:4px 0;font:13px/1 system-ui,-apple-system,"Noto Sans",sans-serif;color:#222}
+        .lsm-item{all:unset;box-sizing:border-box;width:100%;display:flex;justify-content:space-between;gap:24px;padding:7px 14px;cursor:default}
+        .lsm-item:hover:not(:disabled),.lsm-item:focus-visible{background:#e8f0fe}
+        .lsm-item:disabled{color:#aaa}
+        .lsm-acc{color:#888}
+        .lsm-sep{height:1px;background:#e3e3e3;margin:4px 0}
+        html.linux-spike-has-menubar #app{position:fixed!important;top:26px!important;left:0;right:0;bottom:0;height:auto!important}`;
+      document.head.appendChild(css);
+      bar = document.createElement('div'); bar.id = 'linux-spike-menubar'; bar.setAttribute('role','menubar');
+      document.body.appendChild(bar);
+      document.documentElement.classList.add('linux-spike-has-menubar');
+      document.addEventListener('mousedown', e => { if (openMenu && !openMenu.contains(e.target) && !bar.contains(e.target)) close(); }, true);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && openMenu) { close(); e.stopPropagation(); } }, true);
+      window.addEventListener('blur', close);
+      window.addEventListener('resize', close);
+    }
+    bar.textContent = '';
+    for (const key of ORDER) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'lsm-top'; b.dataset.menu = key;
+      b.textContent = tr(key === 'file' ? 'menu.file.title' : key === 'edit' ? 'menu.edit.title' : key === 'view' ? 'menu.view.title' : 'menu.help.title');
+      b.addEventListener('mousedown', e => { e.preventDefault(); openMenu && b.classList.contains('lsm-open') ? close() : open(key, b); });
+      b.addEventListener('mouseenter', () => { if (openMenu && !b.classList.contains('lsm-open')) open(key, b); });
+      bar.appendChild(b);
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { render(); connect(); });
+  else { render(); connect(); }
 })();
 </script>
 """
 
 
 class Host:
-    def __init__(self, port: int):
+    MAX_INFLIGHT_RPC = 256  # per WebSocket connection
+
+    def __init__(self, port: int, token: str | None = None, embedded: bool = False):
         self.port = port
+        self.token = token or None
+        self.embedded = embedded
+        self.allowed_hosts = {f"{HOSTNAME}:{port}", f"localhost:{port}", f"127.0.0.1:{port}"}
+        self.allowed_origins = {f"http://{h}" for h in self.allowed_hosts}
+        self.saveas_approved: set[str] = set()   # paths the user picked in the native Save As dialog
+        self.menu_state = {"project": False, "initial": False}
         self.clients: set[web.WebSocketResponse] = set()
         self.settings = Settings()
         self.projects = Projects(self)
         self.hubs = Hubs(self)
         self.content = Content()
         self.region = (locale.getlocale()[0] or "en_US").split("_")[-1].upper() or "US"
-        self.app = web.Application(client_max_size=128 * 1024 * 1024)
+        self.app = web.Application(client_max_size=128 * 1024 * 1024, middlewares=[self.guard])
         r = self.app.router
         r.add_post("/v1/sentryEnabled", self.h_sentry)
         r.add_post("/activate", self.h_activate)
@@ -888,11 +1076,42 @@ class Host:
         r.add_get("/projects/{key}/{file}", self.h_project_get)
         r.add_post("/linux/drop", self.h_drop)
         r.add_post("/linux/menu", self.h_menu)
+        r.add_get("/linux/login", self.h_login)
         r.add_get("/debug", self.h_debug)
         r.add_route("*", "/{tail:.*}", self.h_static)
-        self.app.middlewares.append(self.cors)
 
     # ------------------------------------------------------------------ urls
+    def inject_js(self) -> str:
+        return INJECT_JS
+
+    def menu_labels(self) -> dict:
+        """Flattened menu.* strings from the Windows host's own translations (hosts/translations)."""
+        lang = self.settings.get("ui.language") or CFG.get("defaultLanguage", "en-US")
+        cache = getattr(self, "_label_cache", {})
+        if lang in cache:
+            return cache[lang]
+        tdir = PLATFORM / "hosts" / "translations"
+        cands = [tdir / f"hostapp.{lang}.json", *sorted(tdir.glob(f"hostapp.{lang.split('-')[0]}-*.json")),
+                 tdir / "hostapp.en-US.json"]
+        out = {}
+        for f in cands:
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+
+            def walk(o, p):
+                if isinstance(o, dict):
+                    for k, v in o.items():
+                        walk(v, f"{p}.{k}" if p else k)
+                elif isinstance(o, str):
+                    out[p] = o
+            walk(data.get("menu", {}), "menu")
+            break
+        cache[lang] = out
+        self._label_cache = cache
+        return out
+
     @property
     def base(self):
         return f"http://{HOSTNAME}:{self.port}"
@@ -905,18 +1124,51 @@ class Host:
         return f"{self.base}/?{urlencode(q)}"
 
     @web.middleware
-    async def cors(self, request, handler):
+    async def guard(self, request, handler):
+        """Only the app's own window may talk to the host.
+
+        The server listens on loopback, but any web page in the user's normal browser can still send
+        requests to 127.0.0.1 / *.localhost, and other local users can connect directly. So:
+          * Host header must be ours (defeats DNS rebinding),
+          * a browser-supplied Origin must be ours, and Sec-Fetch-Site must not be cross-site
+            (blocks cross-site fetch/form/img/WebSocket, which carry these headers),
+          * when a session token is set (Electron), every request must carry it
+            (cookie set by the shell, or X-Spike-Token for the shell's own calls).
+        No CORS headers are ever granted: the web app is same-origin.
+        """
+        reason = None
+        if request.headers.get("Host", "") not in self.allowed_hosts:
+            reason = "host"
+        elif "Origin" in request.headers and request.headers["Origin"] not in self.allowed_origins:
+            reason = "origin"
+        elif request.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+            reason = "cross-site"
+        elif request.path == "/linux/login":
+            return await handler(request)  # checks the one-time token itself
+        elif self.token:
+            got = request.headers.get("X-Spike-Token") or request.cookies.get("spike_token") or ""
+            if not secrets.compare_digest(got.encode(), self.token.encode()):
+                reason = "token"
+        if reason:
+            log.warning("rejected %s %s (%s)", request.method, request.path, reason)
+            return web.Response(status=403, text="forbidden")
         if request.method == "OPTIONS":
-            resp = web.Response()
-        else:
-            resp = await handler(request)
-        if not isinstance(resp, web.WebSocketResponse) and not resp.prepared:
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            resp.headers["Access-Control-Allow-Methods"] = "*"
-            resp.headers["Access-Control-Allow-Headers"] = "*"
-        return resp
+            return web.Response(status=204)
+        return await handler(request)
 
     # ------------------------------------------------------------------ http
+    def login_url(self):
+        return f"{self.base}/linux/login?t={self.token}"
+
+    async def h_login(self, request):
+        """Browser modes: exchange the token from the launch URL for an HttpOnly same-site cookie."""
+        got = request.query.get("t", "")
+        if not (self.token and secrets.compare_digest(got.encode(), self.token.encode())):
+            return web.Response(status=403, text="forbidden")
+        resp = web.HTTPFound(self.boot_url())
+        resp.set_cookie("spike_token", self.token, httponly=True, samesite="Strict", path="/")
+        raise resp
+
     async def h_debug(self, request):
         raise web.HTTPFound(self.boot_url())
 
@@ -925,44 +1177,54 @@ class Host:
 
     async def h_activate(self, request):
         argv = await request.json()
-        await self.projects.open_files([a for a in argv if Path(a).suffix[1:].lower() in PROJECT_EXTS])
+        if not isinstance(argv, list):
+            return web.Response(status=400)
+        files = [str(a) for a in argv if isinstance(a, str) and Path(a).suffix[1:].lower() in PROJECT_EXTS]
+        await self.projects.open_files(files)
         return web.Response()
 
     async def h_drop(self, request):
         form = await request.post()
         f = form.get("file")
-        if f is None:
+        if f is None or not getattr(f, "filename", None):
             return web.Response(status=400)
-        data = f.file.read()
-        dst = PROJECT_DIR / Path(f.filename).name
-        if dst.exists() and dst.read_bytes() != data:
-            dst = self.projects.unique_path(Path(f.filename).stem)
-            dst = dst.with_suffix(Path(f.filename).suffix)
-        if not dst.exists():
-            dst.write_bytes(data)
+        name = Path(f.filename).name
+        if Path(name).suffix[1:].lower() not in PROJECT_EXTS:
+            return web.Response(status=400)
+        data = await asyncio.to_thread(f.file.read)
+        dst = await asyncio.to_thread(self.projects.store_dropped, name, data)
         await self.projects.open_files([str(dst)])
         return web.Response()
 
     async def h_menu(self, request):
-        await self.broadcast("/menu/itemClicked", {"item": request.query.get("item")})
+        item = request.query.get("item")
+        if item not in MENU_ITEMS:
+            return web.Response(status=400)
+        await self.menu_click(item)
         return web.Response()
+
+    async def menu_click(self, item):
+        await self.broadcast("/menu/itemClicked", {"item": item})
 
     async def h_tmp_save(self, request):
         try:
             form = await request.post()
-            await self.content.write_tmp(request.match_info["tmp_id"], request.match_info["path"], form["file"].file.read())
+            data = await asyncio.to_thread(form["file"].file.read)
+            await asyncio.to_thread(self.content.write_tmp, request.match_info["tmp_id"], request.match_info["path"], data)
             return web.Response()
+        except BadPath:
+            return web.Response(status=400, text="invalid path")
         except Exception:
             log.exception("tmp save failed")
             return web.Response(status=500)
 
     async def h_files_saveas(self, request):
         form = await request.post()
-        name = form.get("name") or "data"
-        data = form["file"].file.read()
+        name = Path(str(form.get("name") or "data")).name
+        data = await asyncio.to_thread(form["file"].file.read)
         path = await DIALOGS.save("Save As", documents_dir() / name, ["csv"])
         if path:
-            Path(path).write_bytes(data)
+            await asyncio.to_thread(Path(path).write_bytes, data)
         return web.Response()
 
     async def h_files_load(self, request):
@@ -971,38 +1233,53 @@ class Host:
         if not sel:
             return web.json_response(None)
         p = sel[0]
-        return web.json_response({"file": p, "content": Path(p).read_text(encoding="utf-8", errors="replace")})
+        text = await asyncio.to_thread(Path(p).read_text, encoding="utf-8", errors="replace")
+        return web.json_response({"file": p, "content": text})
+
+    @staticmethod
+    async def _list_dir(base: Path, rel: str):
+        d = safe_join(base, rel)
+        items = await asyncio.to_thread(lambda: sorted(os.listdir(d)) if d and d.is_dir() else [])
+        return web.json_response(items)
+
+    @staticmethod
+    async def _text_file(base: Path, rel: str):
+        f = safe_join(base, rel)
+        if not (f and f.is_file()):
+            raise web.HTTPNotFound()
+        resp = web.FileResponse(f)  # streamed (sendfile), not read into memory
+        resp.content_type = "text/plain"
+        resp.charset = "utf-8"
+        return resp
 
     async def h_bundled_dir(self, request):
-        d = safe_join(PLATFORM, request.match_info["path"])
-        return web.json_response(sorted(os.listdir(d)) if d and d.is_dir() else [])
+        return await self._list_dir(PLATFORM, request.match_info["path"])
 
     async def h_content_dir(self, request):
-        d = safe_join(CONTENT_DIR, request.match_info["path"])
-        return web.json_response(sorted(os.listdir(d)) if d and d.is_dir() else [])
+        return await self._list_dir(CONTENT_DIR, request.match_info["path"])
 
     async def h_bundled_file(self, request):
-        f = safe_join(PLATFORM, request.match_info["path"])
-        if f and f.is_file():
-            return web.Response(text=f.read_text(encoding="utf-8", errors="replace"), content_type="text/plain")
-        raise web.HTTPNotFound()
+        return await self._text_file(PLATFORM, request.match_info["path"])
 
     async def h_content_file(self, request):
-        f = safe_join(CONTENT_DIR, request.match_info["path"])
-        if f and f.is_file():
-            return web.Response(text=f.read_text(encoding="utf-8", errors="replace"), content_type="text/plain")
-        raise web.HTTPNotFound()
+        return await self._text_file(CONTENT_DIR, request.match_info["path"])
 
     async def h_project_save(self, request):
         try:
             form = await request.post()
             key = request.match_info["key"]
-            data = form["file"].file.read()
+            data = await asyncio.to_thread(form["file"].file.read)
             path = form.get("path")
             if path:
-                deleted = await asyncio.to_thread(self.projects.save_as, key, path, data)
+                # Save As: the path must be one the user just chose in the native dialog (/projects/saveAs)
+                path = str(Path(path).resolve())
+                if path not in self.saveas_approved or Path(path).suffix[1:].lower() not in PROJECT_EXTS:
+                    log.warning("save-as to unapproved path refused: %s", path)
+                    return web.Response(status=403, text="path not chosen by user")
+                self.saveas_approved.discard(path)
+                deleted = await self.projects.locked(self.projects.save_as, key, path, data)
                 return web.json_response({"deletedProjectId": deleted})
-            await asyncio.to_thread(self.projects.save, key, form.get("name") or "Project", data)
+            await self.projects.locked(self.projects.save, key, form.get("name") or "Project", data)
             return web.Response()
         except Exception:
             log.exception("project save failed")
@@ -1020,8 +1297,9 @@ class Host:
         if file.startswith("monitors"):
             return web.Response(text=self.projects.projects[key]["meta"]["monitors"] or "", content_type="application/json")
         if file.startswith("scratch") or file.startswith("projectbody"):
-            return web.Response(body=self.projects.program(key) or b"", content_type="application/zip")
-        return web.Response(body=self.projects.full_project(key) or b"", content_type="application/octet-stream")
+            return web.Response(body=await asyncio.to_thread(self.projects.program, key) or b"", content_type="application/zip")
+        return web.Response(body=await asyncio.to_thread(self.projects.full_project, key) or b"",
+                            content_type="application/octet-stream")
 
     async def h_static(self, request):
         if request.headers.get("Upgrade", "").lower() == "websocket":
@@ -1033,7 +1311,7 @@ class Host:
         override = None
         f = None
         if path.startswith("/content/"):
-            f, override = self.content.resolve_web_content(path)
+            f, override = await asyncio.to_thread(self.content.resolve_web_content, path)
         if f is None:
             for base in (WEB, PLATFORM):
                 c = safe_join(base, path)
@@ -1046,22 +1324,34 @@ class Host:
         if override is not None:
             return web.Response(body=override, content_type="application/json")
         if f == WEB / "index.html":
-            html = f.read_text(encoding="utf-8").replace("</head>", INJECT_JS + "</head>", 1)
-            return web.Response(text=html, content_type="text/html")
+            html = f.read_text(encoding="utf-8").replace("</head>", self.inject_js() + "</head>", 1)
+            return web.Response(text=html, content_type="text/html", headers={"Cache-Control": "no-store"})
         resp = web.FileResponse(f)
         resp.content_type = ctype.split(";")[0]
         return resp
 
     # ------------------------------------------------------------------ websocket rpc
     async def ws_handler(self, request):
-        ws = web.WebSocketResponse(max_msg_size=64 * 1024 * 1024, heartbeat=None)
+        ws = web.WebSocketResponse(max_msg_size=64 * 1024 * 1024, heartbeat=30)
         await ws.prepare(request)
         self.clients.add(ws)
         log.info("web connected (%d clients)", len(self.clients))
+        inflight = asyncio.Semaphore(self.MAX_INFLIGHT_RPC)
+        tasks: set[asyncio.Task] = set()
+
+        async def run(data):
+            try:
+                await self.handle_rpc(ws, data)
+            finally:
+                inflight.release()
+
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
-                    asyncio.create_task(self.handle_rpc(ws, msg.data))
+                    await inflight.acquire()  # backpressure: stop reading while too many calls are pending
+                    t = asyncio.create_task(run(msg.data))
+                    tasks.add(t)
+                    t.add_done_callback(tasks.discard)
                 elif msg.type == WSMsgType.ERROR:
                     break
         finally:
@@ -1082,6 +1372,25 @@ class Host:
     async def broadcast(self, method, params=None):
         obj = {"method": method, "params": params, "jsonrpc": "2.0"}
         await asyncio.gather(*(self._send(ws, obj) for ws in list(self.clients)))
+
+    async def shutdown(self, browser_proc=None):
+        """Fast exit: close page sockets ourselves, then hubs, browser, state file."""
+        for ws in list(self.clients):
+            try:
+                await asyncio.wait_for(ws.close(code=1001), 1)
+            except Exception:
+                pass
+        self.clients.clear()
+        try:
+            await asyncio.wait_for(self.hubs.disconnect_all(), 3)
+        except Exception:
+            log.warning("hub disconnect timed out on shutdown")
+        if browser_proc and browser_proc.returncode is None:
+            browser_proc.terminate()
+        try:
+            STATE.unlink()
+        except OSError:
+            pass
 
     async def handle_rpc(self, ws, raw):
         try:
@@ -1107,14 +1416,23 @@ class Host:
                 await self._send(ws, {"id": rid, "error": {"code": 0, "message": message}, "jsonrpc": "2.0"})
 
         try:
-            h = self.rpc_table().get(method)
+            h = self._rpc.get(method)
             if h is None:
                 log.debug("unhandled rpc %s", method)
                 return await err("Not implemented")
             await h(a0, ok, err, ws)
+        except BadPath:
+            await err("Invalid path")
         except Exception as e:
             log.exception("rpc %s failed", method)
-            await err(str(e))
+            await err(type(e).__name__)
+
+    @property
+    def _rpc(self):
+        t = getattr(self, "_rpc_cache", None)
+        if t is None:
+            t = self._rpc_cache = self.rpc_table()
+        return t
 
     def host_config(self):
         return {
@@ -1150,8 +1468,10 @@ class Host:
         @reg("/settings/save")
         async def _(a, ok, err, ws):
             vals = {k: (v.get("value") if isinstance(v, dict) else v) for k, v in (a.get("settings") or {}).items()}
-            H.settings.set_many(vals)
+            await asyncio.to_thread(H.settings.set_many, vals)
             await ok({})
+            if "ui.language" in vals:
+                await H.broadcast("/linux/menuLabels", H.menu_labels())
 
         @reg("/ping")
         async def _(a, ok, err, ws):
@@ -1231,9 +1551,29 @@ class Host:
             await H.hubs.stop_scan(a)
             await ok({})
 
-        # menu (no native menubar on Linux; acknowledge)
-        for m in ("/menu/showProjectItems", "/menu/hideProjectItems", "/menu/enableInitialItems"):
-            S[m] = (lambda a, ok, err, ws: ok({}))
+        # menu: same state machine as the Windows host (ClientRpcMenuRequestHandler / DefaultUIService):
+        #   enableInitialItems -> File/Help usable; show/hideProjectItems -> Save as / Move to / Share
+        def menu_rpc(field, value):
+            async def h(a, ok, err, ws):
+                H.menu_state[field] = value
+                await ok({})
+                await H.broadcast("/linux/menuState", dict(H.menu_state))
+            return h
+        S["/menu/enableInitialItems"] = menu_rpc("initial", True)
+        S["/menu/showProjectItems"] = menu_rpc("project", True)
+        S["/menu/hideProjectItems"] = menu_rpc("project", False)
+
+        @reg("/linux/menu")
+        async def _(a, ok, err, ws):
+            item = a.get("item")
+            if item not in MENU_ITEMS:
+                return await err("Unknown menu item")
+            await ok({})
+            await H.menu_click(item)
+
+        @reg("/linux/menuInfo")
+        async def _(a, ok, err, ws):
+            await ok({"labels": H.menu_labels(), "state": dict(H.menu_state)})
 
         # projects
         @reg("/projects/initialprojects")
@@ -1254,7 +1594,7 @@ class Host:
             if rec:
                 d = await DIALOGS.folder("Move To", Path(rec["path"]).parent)
                 if d:
-                    await asyncio.to_thread(H.projects.move_to, pid, d)
+                    await H.projects.locked(H.projects.move_to, pid, d)
 
         @reg("/projects/share")
         async def _(a, ok, err, ws):
@@ -1274,6 +1614,9 @@ class Host:
             rec = H.projects.projects.get(pid)
             init = Path(rec["path"]) if rec else PROJECT_DIR / "Project.llsp3"
             path = await DIALOGS.save("Save As", init, [PROJECT_EXTS[0]])
+            if path:
+                path = str(Path(path).resolve())
+                H.saveas_approved.add(path)  # the follow-up POST /projects/<id> may write exactly here
             await ok({"filePath": path})
 
         @reg("/projects/delete")
@@ -1281,7 +1624,7 @@ class Host:
             pid = a.get("projectId")
             if not pid:
                 return await err("No project id")
-            await asyncio.to_thread(H.projects.delete, pid)
+            await H.projects.locked(H.projects.delete, pid)
             await ok({})
 
         @reg("/projects/showOpenDialog")
@@ -1329,10 +1672,20 @@ async def try_activate(files) -> bool:
         return False
     try:
         async with ClientSession() as s:
-            async with s.post(f"http://127.0.0.1:{st['port']}/activate", json=[str(Path(f).resolve()) for f in files], timeout=3) as r:
+            async with s.post(f"http://{HOSTNAME}:{st['port']}/activate", json=[str(Path(f).resolve()) for f in files],
+                              headers={"Host": f"{HOSTNAME}:{st['port']}", "X-Spike-Token": st.get("token", "")},
+                              timeout=3) as r:
                 return r.status == 200
     except Exception:
         return False
+
+
+def write_state(port: int, token: str):
+    """Port + session token for `spike3 file.llsp3` to hand files to the running instance (owner-only file)."""
+    fd = os.open(STATE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"port": port, "pid": os.getpid(), "token": token}, f)
+    os.chmod(STATE, 0o600)
 
 
 def free_port():
@@ -1381,16 +1734,26 @@ async def main():
         sys.exit(f"web app not found at {WEB}; run extract.py first")
 
     port = args.port or (3046 if port_free(3046) else free_port())  # stable origin keeps web storage
-    host = Host(port)
-    host.projects.initialize()
-    host.projects.initial = [i for i in (host.projects.add_file(f) for f in args.files) if i]
+    # Session token: Electron passes one in (it sets it as a cookie before the page loads);
+    # the plain-browser / headless modes generate one and hand it over once via the boot URL.
+    token = os.environ.pop("SPIKE_SESSION_TOKEN", "") or secrets.token_urlsafe(32)
+    host = Host(port, token=token, embedded=args.embedded)
+    await host.projects.locked(host.projects.initialize)
+    host.projects.initial = await host.projects.locked(host.projects.add_files, args.files)
 
     runner = web.AppRunner(host.app, access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", port).start()
-    STATE.write_text(json.dumps({"port": port, "pid": os.getpid()}))
+    write_state(port, token)
     log.info("SPIKE host %s listening on %s", HOST_VERSION, host.base)
-    log.info("boot url: %s", host.boot_url())
+    log.info("boot url: %s", host.boot_url())  # token is not part of it
+    if args.headless and not args.embedded:
+        # headless/dev: the login URL (with token) goes into an owner-only file, never into the log
+        login_file = USER_DATA / "login-url.txt"
+        fd = os.open(login_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(host.login_url() + "\n")
+        log.info("login url written to %s", login_file)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -1416,7 +1779,7 @@ async def main():
         if not b:
             sys.exit("no Chromium-based browser found (set SPIKE_BROWSER)")
         prof = USER_DATA / "browser-profile"
-        cmd = [b, f"--app={host.boot_url()}", f"--user-data-dir={prof}", "--class=lego-spike",
+        cmd = [b, f"--app={host.login_url()}", f"--user-data-dir={prof}", "--class=lego-spike",
                "--no-first-run", "--no-default-browser-check", "--disable-features=HardwareMediaKeyHandling,Translate",
                "--autoplay-policy=no-user-gesture-required", "--disable-pinch", "--window-size=1440,900"]
         browser_proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -1435,13 +1798,8 @@ async def main():
         asyncio.create_task(watch())
 
     await stop.wait()
-    await host.hubs.disconnect_all()
-    if browser_proc and browser_proc.returncode is None:
-        browser_proc.terminate()
-    try:
-        STATE.unlink()
-    except Exception:
-        pass
+    log.info("shutting down")
+    await host.shutdown(browser_proc)
     await runner.cleanup()
 
 

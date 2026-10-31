@@ -1,7 +1,7 @@
 {
   "name": "spike3-linux",
   "productName": "spike3-linux",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "LEGO Education SPIKE 3 app for Linux (unofficial)",
   "homepage": "https://github.com/duckducktw/spike-linux",
   "author": {
@@ -28,6 +28,7 @@
     },
     "files": [
       "main.js",
+      "preload.js",
       "package.json"
     ],
     "extraResources": [

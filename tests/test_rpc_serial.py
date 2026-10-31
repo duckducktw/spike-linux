@@ -9,10 +9,14 @@ import os
 import pty
 import subprocess
 import sys
+import tempfile
 import tty
 from pathlib import Path
 
 import aiohttp
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import UDF  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = 3099
@@ -22,12 +26,22 @@ async def main():
     master, slave = pty.openpty()
     tty.setraw(slave)
     slave_name = os.ttyname(slave)
-    env = dict(os.environ, SPIKE_FAKE_USB=f"{slave_name}:0x0694:0x0009")
+    tmp = Path(tempfile.mkdtemp(prefix="spike-serial-"))
+    env = dict(os.environ, SPIKE_FAKE_USB=f"{slave_name}:0x0694:0x0009", HOME=str(tmp),
+               XDG_CONFIG_HOME=str(tmp / "cfg"), XDG_DOCUMENTS_DIR=str(tmp / "Documents"))
+    env.pop("SPIKE_SESSION_TOKEN", None)
     proc = subprocess.Popen([sys.executable, str(ROOT / "host/spike_host.py"), "--headless", "--port", str(PORT)], env=env)
     try:
-        await asyncio.sleep(1.5)
+        state = tmp / "cfg" / UDF / "linux-host.json"
+        for _ in range(100):
+            if state.exists():
+                break
+            await asyncio.sleep(0.1)
+        token = json.loads(state.read_text())["token"]
+        await asyncio.sleep(0.5)
         async with aiohttp.ClientSession() as s:
-            ws = await s.ws_connect(f"ws://localhost:{PORT}")
+            ws = await s.ws_connect(f"ws://127.0.0.1:{PORT}",
+                                    headers={"Host": f"spike.localhost:{PORT}", "Cookie": f"spike_token={token}"})
             n = 0
             pending = {}
             notes = asyncio.Queue()

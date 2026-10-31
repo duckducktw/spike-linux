@@ -60,8 +60,8 @@ asyncio.run(main())
 EOF
   su kid -c "cd ~ && xvfb-run -a -s '-screen 0 1600x1000x24' spike3 --no-sandbox --remote-debugging-port=9333 > /tmp/app.log 2>&1 &"
   python3 /tmp/check.py || { echo "--- app.log"; tail -30 /tmp/app.log; }
-  pkill -f /opt/spike3-linux/spike3 || true; sleep 3
-  pgrep -f 'spike3.py --embedded' >/dev/null && echo "host still running after app exit (BAD)" || echo "host stopped with app"
+  pkill -x spike3 || pkill -f '^/opt/spike3-linux/spike3' || true; sleep 3
+  pgrep -f 'python3 /opt/spike3-linux/resources/host/spike3\.py --embedded$' >/dev/null && echo "host still running after app exit (BAD)" || echo "host stopped with app"
   grep -iE "error|fatal" /tmp/app.log | grep -viE "dbus|gpu|viz|vaapi|ozone|libva|gles|egl|sharedimage|bus.cc|cert_verify" | head -5 || true
 fi
 $REMOVE >/dev/null

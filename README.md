@@ -1,70 +1,132 @@
 # SPIKE 3 for Linux
 
-把官方 Windows 版 **LEGO Education SPIKE 3.6.1** 搬到 Linux。
+English | [繁體中文](README.zh-TW.md)
 
-官方 Windows 版是「網頁 app ＋ 一層 Windows 原生外殼」（WPF + CefSharp 瀏覽器 + 本機 Web 伺服器）。網頁本體跨平台，只有外殼是 Windows 專用。本專案：
+Run the **LEGO Education SPIKE 3** app (v3.6.1) natively on Linux: program SPIKE Prime and SPIKE Essential hubs with Word Blocks, Icon Blocks or Python, over USB or Bluetooth.
 
-- `host/extract.py`：從官方 MSI 裡把網頁 app 原封不動抽出來（藏在 1.3 GB 的 .NET DLL 資源裡）。
-- `host/spike_host.py`：用 Python 重寫原生外殼（照反編譯的 C# 行為做），網頁 app 不改一行。
-- `electron/`：視窗用 Electron（內建 Chromium），不需要系統瀏覽器；Python host 由 Electron 啟動與關閉。
+> Unofficial community project. Not affiliated with, endorsed by, or supported by the LEGO Group.
+> This repository contains no LEGO code or content — the app is extracted on your machine from LEGO's own Windows installer.
 
-## 安裝
+## Why this exists
 
-### 套件（.deb / .rpm）
+LEGO ships SPIKE 3 for Windows, macOS, iPadOS, Android and ChromeOS, plus a browser version — but no Linux desktop app.
+The Windows app turns out to be a web app inside a thin Windows shell (WPF + CefSharp + a local Kestrel server that bridges USB/Bluetooth to the page). This project:
 
-到 [Releases](https://github.com/duckducktw/spike-linux/releases) 下載：
+- **extracts** the original web app from the official Windows MSI, unchanged;
+- **reimplements the native shell in Python** (the local server, the JSON-RPC protocol the page speaks, USB serial + BLE hub bridge, project files, content downloads), following the decompiled C# behaviour;
+- **wraps it in Electron**, so it runs as a normal desktop app with its own window, taskbar icon, menu bar and file associations.
 
-```bash
-sudo apt install ./spike3-linux_*_amd64.deb      # Ubuntu 24.04+ / Debian 13+
-sudo dnf install ./spike3-linux_*_x86_64.rpm     # Fedora 41+
-spike3
-```
+Compared with the browser version, you get offline use, projects saved as normal `.llsp3` files in `~/Documents`, double-click to open, and no dependency on Web Serial / Web Bluetooth support in your browser.
 
-第一次開啟會從 LEGO 官方下載安裝檔（約 1.4 GB）、驗證 SHA-256 後解出網頁 app。套件本身不含任何 LEGO 檔案。USB 連 Hub 已附 udev 規則，不用加 dialout 群組。
+## Install
 
-裝完選單有「LEGO Education SPIKE」，或執行 `spike3`。`.llsp3` / `.llsp` 檔可雙擊開啟。
-
-### 從原始碼打包
+Download the package for your distro from [Releases](https://github.com/duckducktw/spike-linux/releases):
 
 ```bash
-sudo apt install msitools rpm python3-pip nodejs npm
-packaging/build.sh          # -> dist/*.deb dist/*.rpm
+# Ubuntu 24.04+ / Debian 13+
+sudo apt install ./spike3-linux_*_amd64.deb
+
+# Fedora 41+
+sudo dnf install ./spike3-linux_*_x86_64.rpm
 ```
 
-開發時直接跑：`cd electron && npm ci && SPIKE_APP_ROOT=<解出的 app 目錄> npx electron .`
+Then open **LEGO Education SPIKE** from your app menu, or run `spike3`.
 
-### 發新版
+**First launch** downloads the official installer from LEGO (~1.4 GB), verifies its SHA-256 and extracts the app to `~/.local/share/spike3-linux/`. This needs about 4.5 GB free temporarily and ~1.4 GB afterwards. It happens once per user.
 
-推一個 `v*` tag，GitHub Actions 會跑測試、打包 .deb 和 .rpm、在乾淨的 Ubuntu / Debian / Fedora 容器裡各裝一次，然後自動發 Release。
+Already have the MSI? `spike3 --setup /path/to/SPIKE_APP_3_Win10__3.6.1_Global.msi` (it must match the pinned SHA-256).
 
-## 支援狀況
+**Requirements:** x86_64, Python 3.10+, `msitools` (pulled in automatically by the package). Chromium is bundled; no system browser is needed.
 
-| 功能 | 狀態 |
+### Connecting a hub
+
+- **USB:** plug it in. The package installs a udev rule that gives the logged-in user access to LEGO hubs (vendor `0694`); no need to join `dialout`.
+- **Bluetooth:** needs BlueZ (standard on desktop distros). SPIKE Prime / Essential with current firmware use Bluetooth Low Energy.
+
+## Status
+
+| Feature | Status |
 |---|---|
-| 首頁、課程、選 Prime / Essential | ✅ 實測 |
-| Python 編輯器（Monaco）、積木區 | ✅ 實測 |
-| 專案新增 / 自動儲存 / 從 My Projects 重開 / 雙擊 .llsp3 開啟 | ✅ 實測 |
-| 另存、匯出、刪除、搬資料夾 | 已實作，未實測 |
-| USB 連 Hub | ✅ 用假序列埠實測：web app 自動偵測、連線、雙向收發 SPIKE 封包；尚未接真 Hub |
-| 藍牙 BLE 連 Hub | 已實作；BlueZ 掃描實測正常，尚未連真 Hub |
-| 線上內容版本檢查 | ✅（`lego.cn` 網域解析不到，已自動改走 `.com`） |
-| 韌體更新、錄音 | 已實作，未實測 |
-| 傳統藍牙（BTC，舊版 Hub 韌體） | ❌ 未實作 |
-| 遊戲手把 | ❌ 未實作 |
+| Home, lessons, choosing Prime / Essential | ✅ tested |
+| Word Blocks / Icon Blocks / Python (Monaco) editors | ✅ tested |
+| New, autosave, reopen from My Projects, open `.llsp3` by double-click | ✅ tested |
+| Menu bar (File / Edit / View / Help) | ✅ tested — native Electron menu; Save as / Move to / Share enable only inside a project |
+| Save as, export, delete, move to folder | implemented, not tested end-to-end |
+| USB hub connection | ✅ tested against an emulated hub (pty): detect, connect, two-way SPIKE packets. **Not yet tested with a real hub.** |
+| Bluetooth LE hub connection | implemented; BlueZ scanning tested; **not yet tested with a real hub** |
+| Firmware update, sound recording | implemented, not tested |
+| Classic Bluetooth (BTC, very old hub firmware) | ❌ not implemented |
+| Gamepads | ❌ not implemented |
 
-## 檔案位置
+If you try it with a real hub, please open an issue with the result and `~/.config/SPIKE3/log.txt`.
 
-- 設定 / 紀錄：`~/.config/SPIKE3/`（`log.txt`）
-- 下載的課程內容：`~/.local/share/SPIKE3/`
-- 專案：`~/Documents/LEGO Education SPIKE/`
+## Files
 
-## 測試
+| What | Where |
+|---|---|
+| Your projects | `~/Documents/LEGO Education SPIKE/` |
+| Settings and log | `~/.config/SPIKE3/` (`log.txt`) |
+| Downloaded lesson content | `~/.local/share/SPIKE3/` |
+| Extracted app | `~/.local/share/spike3-linux/app/` |
+
+To uninstall completely: remove the package, then delete the folders above you no longer need.
+
+## Security model
+
+The Python host serves the app on `127.0.0.1` and can read/write project files and talk to hubs, so it only answers the app's own window:
+
+- every request must carry a per-launch random token (an HttpOnly cookie set by Electron; never in URLs, logs or the page's JavaScript);
+- the `Host` and `Origin` headers must be the app's own, and cross-site requests are refused — other websites in your browser cannot reach it (no CORS, no DNS rebinding);
+- *Save as* only writes to the exact path you picked in the file dialog; every other file path is confined to the project/content folders;
+- the downloaded installer is SHA-256 pinned, and extraction refuses any entry that would land outside its target folder.
+
+The Electron window runs with `contextIsolation`, `sandbox` and no Node integration. The preload exposes one function (reporting menu labels/state). Links that leave the app open in your normal browser.
+
+Found a problem? Please report it privately via GitHub's *Report a vulnerability*.
+
+## Build from source
 
 ```bash
-.venv/bin/python tests/test_rpc_serial.py        # 用假的序列埠模擬 Hub，測 USB 通道全程
-packaging/test-pkg-in-docker.sh                  # 在乾淨容器裡裝套件、開 Electron、檢查積木區（見檔頭用法）
+sudo apt install nodejs npm python3-pip msitools rpm
+packaging/build.sh            # -> dist/*.deb dist/*.rpm  (version from electron/package.json)
 ```
 
-## 授權
+Run without packaging:
 
-程式碼採 MIT（見 `LICENSE`）。本 repo 只含相容層程式碼。SPIKE 網頁 app 與內容屬 LEGO Group，由使用者自行從官方 MSI 抽取。
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python host/extract.py SPIKE_APP_3_Win10__3.6.1_Global.msi    # -> ./app
+cd electron && npm ci && npx electron .
+```
+
+### Layout
+
+```
+host/spike3.py        launcher: first-run download + verify + extract, then starts the host
+host/extract.py       pulls the web app out of the MSI (~10k .NET manifest resources)
+host/spike_host.py    the native layer: HTTP + WebSocket JSON-RPC, USB/BLE bridge, projects, content
+electron/             window, native menu bar, single-instance + file open handling
+packaging/            build script, deb/rpm post-install (sandbox, AppArmor, udev), container test
+tests/                host security, concurrency, menu bar (real Chromium), serial bridge, extraction
+```
+
+### Tests
+
+```bash
+.venv/bin/python tests/test_host_security.py      # foreign sites / processes can't drive the host; Save as is confined
+.venv/bin/python tests/test_concurrent_save.py    # concurrent saves never drop projects
+.venv/bin/python tests/test_extract_traversal.py  # a tampered MSI can't write outside the target folder
+.venv/bin/python tests/test_menubar.py            # menu bar with real clicks in Chromium (needs the extracted app)
+.venv/bin/python tests/test_rpc_serial.py         # full USB path against an emulated hub
+.venv/bin/python tests/test_shutdown.py           # host exits within seconds when the window closes
+```
+
+### Releases
+
+Pushing a `v*` tag runs CI: tests → build `.deb` + `.rpm` → install, launch and check the blocks editor in clean Ubuntu 24.04, Debian 13 and Fedora 42 containers → publish the release with SHA-256 sums.
+
+## License
+
+Code in this repository: [MIT](LICENSE). Vendored `dnfile` and `bleak` keep their own MIT licenses.
+
+"LEGO", "SPIKE" and the SPIKE app and content are trademarks and property of the LEGO Group. You obtain the app directly from LEGO; this project only makes it run on Linux.

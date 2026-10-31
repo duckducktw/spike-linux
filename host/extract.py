@@ -52,23 +52,43 @@ def extract(msi, out, delete_msi=False, progress=None):
                 return f.read(ln)
 
             mapping = json.loads(read(PREFIX + "map.json"))
-            files = [e for e in mapping if not e["isdir"]]
-            for i, e in enumerate(mapping):
-                p = staging / e["dir"] / e["name"]
-                if e["isdir"]:
-                    p.mkdir(parents=True, exist_ok=True)
-            for i, e in enumerate(files):
-                p = staging / e["dir"] / e["name"]
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(read(PREFIX + e["resource"]))
-                if i % 200 == 0:
-                    progress(30 + 70 * i / len(files), f"寫出 web app {i}/{len(files)}")
+            n = write_tree(staging, mapping, read, progress)
             (staging / "versions.json").write_bytes(read("Com.Lego.Flipper.Windows.PlatformPrepper.versions.json"))
             (staging / "appconfig.json").write_bytes(read("Com.Lego.Flipper.Windows.PlatformPrepper.appconfig.json"))
         if out.exists():
             shutil.rmtree(out)
         staging.rename(out)
     progress(100, "完成")
+    return n
+
+
+def write_tree(staging, mapping, read, progress=None):
+    """Write the platform map's files under `staging`.
+
+    The map comes from the (possibly user-supplied) MSI, so every target is resolved first and
+    must stay inside `staging`; nothing is written if any entry escapes.
+    """
+    progress = progress or (lambda pct, text: None)
+    staging = Path(staging)
+    staging.mkdir(parents=True, exist_ok=True)
+    root = staging.resolve()
+
+    def target(e):
+        p = (staging / str(e["dir"]).lstrip("/") / str(e["name"])).resolve()
+        if p == root or root not in p.parents:
+            raise RuntimeError(f"安裝檔內容不合法（路徑跑出目錄）：{e['dir']}/{e['name']}")
+        return p
+
+    plan = [(e, target(e)) for e in mapping]  # validate everything before writing anything
+    for e, p in plan:
+        if e["isdir"]:
+            p.mkdir(parents=True, exist_ok=True)
+    files = [(e, p) for e, p in plan if not e["isdir"]]
+    for i, (e, p) in enumerate(files):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(read(PREFIX + e["resource"]))
+        if i % 200 == 0:
+            progress(30 + 70 * i / len(files), f"寫出 web app {i}/{len(files)}")
     return len(files)
 
 

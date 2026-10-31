@@ -12,3 +12,5 @@ __pycache__/
 dist/
 host/vendor/
 electron/node_modules/
+audit/
+TASK_audit.md

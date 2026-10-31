@@ -2,8 +2,9 @@
 // The window is this bundled Chromium; the native layer (USB/BLE hub bridge, project files,
 // content) is the Python host, started as a child process and stopped when the app quits.
 'use strict';
-const { app, BrowserWindow, shell, Menu, session, dialog } = require('electron');
+const { app, BrowserWindow, shell, Menu, session, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -26,11 +27,16 @@ if (!app.requestSingleInstanceLock({ files: projectArgs(process.argv) })) {
   let win = null;
   let host = null;
   let base = null;
+  // per-run secret shared with the Python host; sent as an HttpOnly cookie on every request
+  const TOKEN = crypto.randomBytes(32).toString('base64url');
 
   app.on('second-instance', (_ev, argv, _cwd, extra) => {
     const files = (extra && extra.files) || projectArgs(argv);
     if (files.length && base) {
-      const req = http.request(base + '/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const req = http.request(base + '/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Spike-Token': TOKEN },
+      });
       req.on('error', () => {});
       req.end(JSON.stringify(files));
     }
@@ -47,7 +53,7 @@ if (!app.requestSingleInstanceLock({ files: projectArgs(process.argv) })) {
   function startHost() {
     return new Promise((resolve, reject) => {
       const args = [path.join(HOST_DIR, 'spike3.py'), '--embedded', ...projectArgs(process.argv)];
-      host = spawn(python(), args, { stdio: ['pipe', 'pipe', 'inherit'] });
+      host = spawn(python(), args, { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, SPIKE_SESSION_TOKEN: TOKEN } });
       let buf = '';
       let ready = false;
       host.stdout.on('data', d => {
@@ -67,22 +73,87 @@ if (!app.requestSingleInstanceLock({ files: projectArgs(process.argv) })) {
     });
   }
 
+  // ---- native menu bar (File / Edit / View / Help), like the Windows app's WPF menu (UIMenuBuilder).
+  // Labels come from the host's own translations; Save as / Move to / Share follow the web app's
+  // /menu/showProjectItems + /menu/hideProjectItems, relayed by the page through the preload bridge.
+  let menuLabels = {};
+  let menuState = { initial: true, project: false };
+  const L = (key, fallback) => (menuLabels[key] || fallback).replace('{{name}}', 'SPIKE').replace(/\.{3,}|…+/g, '…');
+
+  function hostMenu(item) {   // same path as the Windows host: host broadcasts /menu/itemClicked to the web app
+    if (!base) return;
+    const req = http.request(`${base}/linux/menu?item=${encodeURIComponent(item)}`,
+      { method: 'POST', headers: { 'X-Spike-Token': TOKEN } });
+    req.on('error', () => {});
+    req.end();
+  }
+
+  function buildMenu() {
+    const p = menuState.project;
+    const tpl = [
+      { label: L('menu.file.title', 'File'), submenu: [
+        { label: L('menu.file.new_project', 'New Project'), accelerator: 'CmdOrCtrl+Alt+N', click: () => hostMenu('newProject') },
+        { label: L('menu.file.open', 'Open…'), accelerator: 'CmdOrCtrl+O', click: () => hostMenu('openProject') },
+        { type: 'separator' },
+        { label: L('menu.file.save_as', 'Save as…'), accelerator: 'CmdOrCtrl+Shift+S', enabled: p, click: () => hostMenu('saveAs') },
+        { label: L('menu.file.move_to', 'Move to…'), enabled: p, click: () => hostMenu('moveTo') },
+        { label: L('menu.file.share', 'Share…'), enabled: p, click: () => hostMenu('share') },
+        { type: 'separator' },
+        { label: L('menu.mac_app.quit', 'Quit'), accelerator: 'CmdOrCtrl+Q', role: 'quit' },
+      ] },
+      { label: L('menu.edit.title', 'Edit'), submenu: [
+        { label: L('menu.edit.undo', 'Undo'), role: 'undo' },
+        { label: L('menu.edit.redo', 'Redo'), role: 'redo' },
+        { type: 'separator' },
+        { label: L('menu.edit.cut', 'Cut'), role: 'cut' },
+        { label: L('menu.edit.copy', 'Copy'), role: 'copy' },
+        { label: L('menu.edit.paste', 'Paste'), role: 'paste' },
+        { type: 'separator' },
+        { label: L('menu.edit.select_all', 'Select All'), role: 'selectAll' },
+      ] },
+      { label: L('menu.view.title', 'View'), submenu: [
+        { label: L('menu.view.reload', 'Refresh'), role: 'reload' },
+        { type: 'separator' },
+        { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'resetZoom' },
+        { type: 'separator' },
+        { label: L('menu.view.fullscreen', 'Enter Full Screen'), role: 'togglefullscreen' },
+      ] },
+      { label: L('menu.help.title', 'Help'), submenu: [
+        { label: L('menu.help.item', '{{name}} App help…'), click: () => hostMenu('help') },
+        { label: L('menu.settings', 'Settings'), click: () => hostMenu('settings') },
+        { type: 'separator' },
+        { label: L('menu.debug.toggledevtools', 'Toggle Developer Tools'), role: 'toggleDevTools' },
+      ] },
+    ];
+    const menu = Menu.buildFromTemplate(tpl);
+    Menu.setApplicationMenu(menu);
+    if (process.env.SPIKE_TEST_MENU) {   // tests: dump the live menu (labels + enabled) to stdout
+      const dump = menu.items.map(m => ({ label: m.label, items: m.submenu.items.filter(i => i.type !== 'separator')
+        .map(i => ({ label: i.label, enabled: i.enabled, role: i.role || null })) }));
+      process.stdout.write('MENU ' + JSON.stringify({ state: menuState, menu: dump }) + '\n');
+    }
+  }
+
   function createWindow(info) {
     win = new BrowserWindow({
       width: 1440, height: 900, minWidth: 1024, minHeight: 640,
       title: 'LEGO Education SPIKE',
       icon: path.join(RES, 'icon.png'),
       backgroundColor: '#ffffff',
-      autoHideMenuBar: true,
+      autoHideMenuBar: false,
       show: false,
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+      webPreferences: {
+        contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false,
+        preload: path.join(__dirname, 'preload.js'),
+      },
     });
-    Menu.setApplicationMenu(null);
+    buildMenu();
     win.once('ready-to-show', () => win.show());
     win.on('page-title-updated', e => e.preventDefault());
 
     // links that leave the app (help, store, privacy) open in the user's browser
-    const inApp = url => url.startsWith(info.base);
+    const origin = new URL(info.base).origin;
+    const inApp = url => { try { return new URL(url).origin === origin; } catch (_) { return false; } };
     win.webContents.setWindowOpenHandler(({ url }) => {
       if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
       return { action: 'deny' };
@@ -91,15 +162,23 @@ if (!app.requestSingleInstanceLock({ files: projectArgs(process.argv) })) {
       if (!inApp(url)) { e.preventDefault(); if (/^(https?|mailto):/.test(url)) shell.openExternal(url); }
     });
 
-    // keyboard: devtools / reload / zoom (no menu bar)
+    // F12 for devtools (the menu covers the rest of the accelerators)
     win.webContents.on('before-input-event', (e, input) => {
-      if (input.type !== 'keyDown') return;
-      const c = input.control || input.meta;
-      if (input.key === 'F12' || (c && input.shift && input.key.toLowerCase() === 'i')) { win.webContents.toggleDevTools(); e.preventDefault(); }
-      else if (c && input.key.toLowerCase() === 'r') { win.webContents.reload(); e.preventDefault(); }
-      else if (c && (input.key === '=' || input.key === '+')) { win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5); e.preventDefault(); }
-      else if (c && input.key === '-') { win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5); e.preventDefault(); }
-      else if (c && input.key === '0') { win.webContents.setZoomLevel(0); e.preventDefault(); }
+      if (input.type === 'keyDown' && input.key === 'F12') { win.webContents.toggleDevTools(); e.preventDefault(); }
+    });
+
+    // menu labels/state reported by our own page (whitelisted shape; ignored from any other frame)
+    ipcMain.removeAllListeners('spike-menu');
+    ipcMain.on('spike-menu', (ev, info) => {
+      if (!win || ev.sender !== win.webContents || !inApp(ev.senderFrame.url) || !info || typeof info !== 'object') return;
+      if (info.labels && typeof info.labels === 'object') {
+        menuLabels = Object.fromEntries(Object.entries(info.labels)
+          .filter(([k, v]) => /^menu\.[\w.]+$/.test(k) && typeof v === 'string' && v.length < 200));
+      }
+      if (info.state && typeof info.state === 'object') {
+        menuState = { initial: !!info.state.initial, project: !!info.state.project };
+      }
+      buildMenu();
     });
 
     win.loadURL(info.url);
@@ -117,6 +196,9 @@ if (!app.requestSingleInstanceLock({ files: projectArgs(process.argv) })) {
       return;
     }
     base = info.base;
+    await session.defaultSession.cookies.set({
+      url: info.base, name: 'spike_token', value: TOKEN, httpOnly: true, sameSite: 'strict', path: '/',
+    });
     createWindow(info);
   });
 

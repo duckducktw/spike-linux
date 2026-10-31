@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "vendor"))
 sys.path.insert(0, str(HERE))
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 SPIKE_VERSION = "3.6.1"
 MSI_URL = "https://assets.education.lego.com/_/downloads/SPIKE_APP_3_Win10__3.6.1_Global.msi"
 MSI_SHA256 = "f2b4bd158d3e948e65e9ce00366e6afa6d69f4fe546e1f8b4bad2e6fdf18d31a"
@@ -104,6 +104,29 @@ def download(dst: Path, prog: Progress):
     part.rename(dst)
 
 
+def verify_local_msi(src: Path, prog: Progress):
+    """A user-supplied MSI must be the exact file we pinned, unless SPIKE_ALLOW_UNVERIFIED_MSI=1."""
+    h = hashlib.sha256()
+    size = src.stat().st_size or 1
+    done = 0
+    with open(src, "rb") as f:
+        while True:
+            chunk = f.read(4 << 20)
+            if not chunk:
+                break
+            h.update(chunk)
+            done += len(chunk)
+            prog.update(done * 80 / size, f"核對安裝檔 {done >> 20} / {size >> 20} MB")
+    if h.hexdigest() == MSI_SHA256:
+        return
+    if os.environ.get("SPIKE_ALLOW_UNVERIFIED_MSI") == "1":
+        print(f"warning: {src} is not the pinned SPIKE {SPIKE_VERSION} installer; continuing (SPIKE_ALLOW_UNVERIFIED_MSI=1)",
+              file=sys.stderr)
+        return
+    raise RuntimeError(f"{src.name} 不是官方 SPIKE {SPIKE_VERSION} 安裝檔（SHA-256 不符）。"
+                       "確定要用這個檔案，請設定 SPIKE_ALLOW_UNVERIFIED_MSI=1 再執行。")
+
+
 def setup(msi: str | None = None):
     out = app_root()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +139,7 @@ def setup(msi: str | None = None):
         with tempfile.TemporaryDirectory(dir=out.parent, prefix=".spike3-setup-") as tmp:
             if msi:
                 src = Path(msi).resolve()
+                verify_local_msi(src, prog)
             else:
                 src = Path(tmp) / "SPIKE.msi"
                 download(src, prog)
