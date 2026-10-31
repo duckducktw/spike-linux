@@ -821,6 +821,23 @@ INJECT_JS = r"""
     } catch(e) {}
     return _fetch(input, init);
   };
+  // Blockly only re-measures on window 'resize'. If the workspace was injected while its container
+  // was still 0-sized (window not yet laid out / mapped), blocks stay invisible until the user resizes.
+  // Watch every Blockly container and nudge a resize whenever its box changes.
+  (function(){
+    if (!window.ResizeObserver) return;
+    let pending = false;
+    const kick = () => { if (pending) return; pending = true;
+      requestAnimationFrame(() => { pending = false; window.dispatchEvent(new Event('resize')); }); };
+    const ro = new ResizeObserver(kick);
+    const seen = new WeakSet();
+    const scan = () => document.querySelectorAll('.injectionDiv, .blocklySvg').forEach(el => {
+      const host = el.classList.contains('injectionDiv') ? el.parentElement || el : el.parentElement;
+      if (host && !seen.has(host)) { seen.add(host); ro.observe(host); kick(); }
+    });
+    new MutationObserver(scan).observe(document.documentElement, {childList: true, subtree: true});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) kick(); });
+  })();
   // Linux host shim: file drop + native menu replacement (Windows uses CefSharp/WPF for these)
   document.addEventListener('dragover', function(ev){ ev.preventDefault(); }, true);
   document.addEventListener('drop', async function(ev){
