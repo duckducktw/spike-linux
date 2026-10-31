@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LEGO Education SPIKE
+GenericName=Robotics Programming
+Comment=SPIKE Prime / Essential programming app (unofficial Linux port)
+Exec=spike3 %F
+Icon=lego-spike3
+Terminal=false
+Categories=Education;Development;
+Keywords=lego;spike;prime;essential;robot;scratch;python;
+MimeType=application/x-lego-spike3;application/x-lego-spike;
+StartupWMClass=lego-spike

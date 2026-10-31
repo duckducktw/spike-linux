@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-lego-spike3">
+    <comment>SPIKE 3 Project</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.llsp3"/>
+  </mime-type>
+  <mime-type type="application/x-lego-spike">
+    <comment>SPIKE Legacy Project</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.llsp"/>
+  </mime-type>
+</mime-info>

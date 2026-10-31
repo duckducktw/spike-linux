@@ -9,3 +9,4 @@ decomp/
 files.txt
 probe.py
 __pycache__/
+dist/

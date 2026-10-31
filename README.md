@@ -10,6 +10,19 @@
 
 ## 安裝
 
+### .deb（Ubuntu 24.04+ / Debian 13+）
+
+到 [Releases](https://github.com/duckducktw/spike-linux/releases) 下載 `spike3-linux_*_all.deb`：
+
+```bash
+sudo apt install ./spike3-linux_*_all.deb
+spike3
+```
+
+第一次開啟會從 LEGO 官方下載安裝檔（約 1.4 GB）、驗證 SHA-256 後解出網頁 app。套件本身不含任何 LEGO 檔案。USB 連 Hub 已附 udev 規則，不用加 dialout 群組。
+
+### 從原始碼
+
 ```bash
 sudo apt install msitools python3-venv   # 加上 Chrome 或 Chromium
 ./install.sh                              # 自動下載官方 MSI；或 ./install.sh 路徑/SPIKE.msi
@@ -17,6 +30,10 @@ sudo usermod -aG dialout $USER            # USB 連 Hub 需要，做完重新登
 ```
 
 裝完選單有「LEGO Education SPIKE」，或執行 `spike3`。`.llsp3` / `.llsp` 檔可雙擊開啟。
+
+### 發新版
+
+推一個 `v*` tag，GitHub Actions 會跑測試、打包 .deb、在乾淨的 Ubuntu 容器裡裝一次，然後自動發 Release。
 
 ## 支援狀況
 
@@ -47,4 +64,4 @@ sudo usermod -aG dialout $USER            # USB 連 Hub 需要，做完重新登
 
 ## 授權
 
-本 repo 只含相容層程式碼。SPIKE 網頁 app 與內容屬 LEGO Group，由使用者自行從官方 MSI 抽取。
+程式碼採 MIT（見 `LICENSE`）。本 repo 只含相容層程式碼。SPIKE 網頁 app 與內容屬 LEGO Group，由使用者自行從官方 MSI 抽取。
