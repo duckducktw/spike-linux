@@ -53,7 +53,7 @@ Already have the MSI? `spike3 --setup /path/to/SPIKE_APP_3_Win10__3.6.1_Global.m
 | Menu bar (File / Edit / View / Help) | ✅ tested — native Electron menu; Save as / Move to / Share enable only inside a project |
 | Save as, export, delete, move to folder | implemented, not tested end-to-end |
 | USB hub connection | ✅ tested against an emulated hub (pty): detect, connect, two-way SPIKE packets. **Not yet tested with a real hub.** |
-| Bluetooth LE hub connection | implemented; BlueZ scanning tested; **not yet tested with a real hub** |
+| Bluetooth LE hub connection | ✅ tested end-to-end against a **simulated** SPIKE Prime on a virtual BlueZ adapter (scan, connect, handshake, sensor stream, program upload + run, console output, link loss), driven by the real web app UI; **not yet tested with a real hub** |
 | Firmware update, sound recording | implemented, not tested |
 | Classic Bluetooth (BTC, very old hub firmware) | ❌ not implemented |
 | Gamepads | ❌ not implemented |
@@ -118,6 +118,8 @@ tests/                host security, concurrency, menu bar (real Chromium), seri
 .venv/bin/python tests/test_extract_traversal.py  # a tampered MSI can't write outside the target folder
 .venv/bin/python tests/test_menubar.py            # menu bar with real clicks in Chromium (needs the extracted app)
 .venv/bin/python tests/test_rpc_serial.py         # full USB path against an emulated hub
+.venv/bin/python tests/test_ble_fake_hub.py       # full BLE path against a simulated hub (needs sudo: /dev/vhci)
+.venv/bin/python tests/ui_ble_fake_hub.py         # same, but the real web app UI clicks Connect and Play
 .venv/bin/python tests/test_shutdown.py           # host exits within seconds when the window closes
 ```
 

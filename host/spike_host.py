@@ -594,6 +594,12 @@ class SerialHub(HubConnection):
         await self.on_lost()
 
 
+def ble_adapter_kw() -> dict:
+    """SPIKE_BLE_ADAPTER=hciN picks the BlueZ adapter (tests use a virtual one); default = system default."""
+    a = os.environ.get("SPIKE_BLE_ADAPTER")
+    return {"bluez": {"adapter": a}} if a else {}
+
+
 class BleHub(HubConnection):
     async def connect(self, params):
         from bleak import BleakClient
@@ -604,7 +610,8 @@ class BleHub(HubConnection):
         dev = self.host.hubs.ble_devices.get(self.id, self.id)
         for attempt in range(3):
             try:
-                self.client = BleakClient(dev, disconnected_callback=lambda c: asyncio.create_task(self.on_lost()), timeout=15)
+                self.client = BleakClient(dev, disconnected_callback=lambda c: asyncio.create_task(self.on_lost()), timeout=15,
+                                          **ble_adapter_kw())
                 await self.client.connect()
                 self.tx_char = self.client.services.get_characteristic(self.tx_uuid)
                 await self.client.start_notify(self.rx_uuid, self._notify)
@@ -687,7 +694,7 @@ class Hubs:
             asyncio.create_task(self.found(dev))
 
         try:
-            self.ble_scanner = BleakScanner(detection_callback=cb)
+            self.ble_scanner = BleakScanner(detection_callback=cb, **ble_adapter_kw())
             await self.ble_scanner.start()
             while True:
                 await asyncio.sleep(3600)

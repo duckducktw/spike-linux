@@ -1,0 +1,3 @@
+# test-only: simulated Bluetooth LE hub (tests/fake_ble_hub.py). Apache-2.0, pure python.
+bumble==0.0.236
+playwright>=1.40

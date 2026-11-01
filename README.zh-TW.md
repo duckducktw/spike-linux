@@ -49,7 +49,7 @@ packaging/build.sh          # -> dist/*.deb dist/*.rpm
 | 選單列（檔案 / 編輯 / 檢視 / 說明） | ✅ 實測（Electron 原生選單；另存、搬移在專案內才可按） |
 | 另存、匯出、刪除、搬資料夾 | 已實作，未實測 |
 | USB 連 Hub | ✅ 用假序列埠實測：web app 自動偵測、連線、雙向收發 SPIKE 封包；尚未接真 Hub |
-| 藍牙 BLE 連 Hub | 已實作；BlueZ 掃描實測正常，尚未連真 Hub |
+| 藍牙 BLE 連 Hub | ✅ 用**模擬** Hub 端到端實測（虛擬藍牙網卡＋真 BlueZ）：掃描、連線、握手、感測器資料、上傳並執行程式、主控台輸出、斷線偵測，由真的 web app 介面操作；尚未連真 Hub |
 | 線上內容版本檢查 | ✅（`lego.cn` 網域解析不到，已自動改走 `.com`） |
 | 韌體更新、錄音 | 已實作，未實測 |
 | 傳統藍牙（BTC，舊版 Hub 韌體） | ❌ 未實作 |
@@ -69,6 +69,8 @@ packaging/build.sh          # -> dist/*.deb dist/*.rpm
 .venv/bin/python tests/test_extract_traversal.py # 被動過手腳的 MSI 不能寫出目錄外
 .venv/bin/python tests/test_menubar.py           # 選單列：真瀏覽器、真點擊
 .venv/bin/python tests/test_rpc_serial.py        # 用假的序列埠模擬 Hub，測 USB 通道全程
+.venv/bin/python tests/test_ble_fake_hub.py      # 模擬藍牙 Hub，測 BLE 通道全程（需 sudo：/dev/vhci）
+.venv/bin/python tests/ui_ble_fake_hub.py        # 同上，但由真的 web app 介面按「連線」「執行」
 packaging/test-pkg-in-docker.sh                  # 在乾淨容器裡裝套件、開 Electron、檢查積木區（見檔頭用法）
 ```
 
